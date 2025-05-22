@@ -1,0 +1,16 @@
+# Ignore data directory
+data/
+/data/
+/data/*
+
+# Common data file formats (optional, if you want to be more specific)
+*.csv
+*.tsv
+*.json
+*.xlsx
+*.parquet
+
+# Python cache files (recommended)
+__pycache__/
+*.py[cod]
+*$py.class
