@@ -261,10 +261,13 @@ class TGNMemoryModule(nn.Module):
         """
         Reset memory state at the beginning of each epoch
         """
-        self.memory = nn.Parameter(torch.zeros(self.num_nodes, self.memory_dim), 
-                                   requires_grad=False)
-        self.last_update = nn.Parameter(torch.zeros(self.num_nodes), 
-                                        requires_grad=False)
+        # Get device from existing parameters or use CPU as fallback
+        device = next(self.parameters()).device if len(list(self.parameters())) > 0 else torch.device('cpu')
+        
+        # Use register_buffer for memory states as they shouldn't be trained
+        self.register_buffer('memory', torch.zeros(self.num_nodes, self.memory_dim, device=device))
+        self.register_buffer('last_update', torch.zeros(self.num_nodes, device=device))
+        
         # Messages buffer for each node
         self.messages_buffer = defaultdict(list)
         
@@ -368,17 +371,34 @@ class TemporalAttentionLayer(nn.Module):
         self.key_dim = node_feat_dim + edge_feat_dim + time_feat_dim
         self.value_dim = self.key_dim
         
-        # Multi-head attention layer
+        # To fix dimension mismatch, we'll use a common attention dimension
+        # that all heads can work with
+        self.attention_dim = max(self.query_dim, self.key_dim)
+        
+        # Project query to common attention dimension if needed
+        if self.query_dim != self.attention_dim:
+            self.query_projection = nn.Linear(self.query_dim, self.attention_dim)
+        else:
+            self.query_projection = nn.Identity()
+            
+        # Project key/value to common attention dimension if needed  
+        if self.key_dim != self.attention_dim:
+            self.key_projection = nn.Linear(self.key_dim, self.attention_dim)
+            self.value_projection = nn.Linear(self.value_dim, self.attention_dim)
+        else:
+            self.key_projection = nn.Identity()
+            self.value_projection = nn.Identity()
+        
+        # Multi-head attention layer with aligned dimensions
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.query_dim,
-            kdim=self.key_dim,
-            vdim=self.value_dim,
+            embed_dim=self.attention_dim,
             num_heads=n_heads,
-            dropout=dropout
+            dropout=dropout,
+            batch_first=False
         )
         
         # Output projection layer
-        self.output_layer = nn.Linear(self.query_dim, output_dim)
+        self.output_layer = nn.Linear(self.attention_dim, output_dim)
         
     def forward(self, node_features, node_time_features, neighbor_features, 
                 neighbor_time_features, edge_features, attention_mask=None):
@@ -399,34 +419,36 @@ class TemporalAttentionLayer(nn.Module):
         batch_size, n_neighbors = neighbor_features.size(0), neighbor_features.size(1)
         
         # Create query from node features and time features (target node)
-        query = torch.cat([node_features, node_time_features], dim=1).unsqueeze(1)  # [batch_size, 1, query_dim]
+        query_raw = torch.cat([node_features, node_time_features], dim=1)  # [batch_size, query_dim]
+        query = self.query_projection(query_raw).unsqueeze(1)  # [batch_size, 1, attention_dim]
         
         # Create key/value from neighbor features, time features, and edge features
-        key = torch.cat([
+        key_raw = torch.cat([
             neighbor_features.view(batch_size * n_neighbors, -1),  # Flatten neighbor features
             neighbor_time_features.view(batch_size * n_neighbors, -1),  # Flatten neighbor time features
             edge_features.view(batch_size * n_neighbors, -1)  # Flatten edge features
         ], dim=1).view(batch_size, n_neighbors, -1)  # [batch_size, n_neighbors, key_dim]
         
-        # Value is same as key for self-attention
-        value = key
+        # Project key and value to attention dimension
+        key = self.key_projection(key_raw)  # [batch_size, n_neighbors, attention_dim]
+        value = self.value_projection(key_raw)  # [batch_size, n_neighbors, attention_dim]
         
         # Create attention mask if provided
-        attn_mask = None
+        key_padding_mask = None
         if attention_mask is not None:
-            attn_mask = ~attention_mask.bool()  # Convert to boolean mask (True for invalid positions)
-            attn_mask = attn_mask.unsqueeze(1).expand(-1, n_neighbors, -1)  # [batch_size, n_neighbors, n_neighbors]
+            # For key_padding_mask: True means "ignore this position"
+            key_padding_mask = ~attention_mask.bool()  # [batch_size, n_neighbors]
         
         # Apply attention
-        # Transpose to get the expected shape for nn.MultiheadAttention
-        query = query.transpose(0, 1)  # [1, batch_size, query_dim]
-        key = key.transpose(0, 1)  # [n_neighbors, batch_size, key_dim]
-        value = value.transpose(0, 1)  # [n_neighbors, batch_size, value_dim]
+        # Transpose to get the expected shape for nn.MultiheadAttention (seq_len, batch, dim)
+        query = query.transpose(0, 1)  # [1, batch_size, attention_dim]
+        key = key.transpose(0, 1)  # [n_neighbors, batch_size, attention_dim]
+        value = value.transpose(0, 1)  # [n_neighbors, batch_size, attention_dim]
         
-        output, _ = self.attention(query, key, value, attn_mask=attn_mask)
+        output, _ = self.attention(query, key, value, key_padding_mask=key_padding_mask)
         
         # Reshape output and pass through output layer
-        output = output.transpose(0, 1).squeeze(1)  # [batch_size, query_dim]
+        output = output.transpose(0, 1).squeeze(1)  # [batch_size, attention_dim]
         output = self.output_layer(output)  # [batch_size, output_dim]
         
         return output
@@ -527,10 +549,21 @@ class TemporalGraphNetwork(nn.Module):
                 output_dim=embedding_dim if layer == n_layers - 1 else memory_dim,
                 n_heads=n_heads,
                 dropout=dropout
-            )
-            for layer in range(n_layers)
+            ) for layer in range(n_layers)
         ])
         
+        # Projection from memory_dim to embedding_dim if n_layers is 0 or no-neighbor path taken
+        self.final_embedding_projection = nn.Identity()
+        if self.memory_dim != self.embedding_dim and n_layers == 0 : # only add if n_layers is 0 and dims differ
+             self.final_embedding_projection = nn.Linear(self.memory_dim, self.embedding_dim)
+        elif n_layers > 0 and self.memory_dim != self.embedding_dim: # if layers exist, intermediate is memory_dim
+            # This case is handled by the last attention layer outputting embedding_dim
+            # However, if the no-neighbor path is taken in compute_temporal_embeddings,
+            # it returns node_embedding (memory_dim). This needs projection.
+            # Let's make final_embedding_projection always available if memory_dim != embedding_dim
+            # for the no-neighbor path in compute_temporal_embeddings.
+             self.final_embedding_projection = nn.Linear(self.memory_dim, self.embedding_dim)
+
         # For link prediction task
         self.link_predictor = nn.Sequential(
             nn.Linear(embedding_dim * 2, embedding_dim),
@@ -572,10 +605,18 @@ class TemporalGraphNetwork(nn.Module):
         # Initialize embeddings with memory and node features
         node_embeddings = self.node_embedding(node_features)  # [batch_size, memory_dim]
         
-        # If no neighbors, return only node embeddings
+        # If no neighbors, project memory_dim to embedding_dim and return
         if neighbor_ids is None or len(neighbor_ids) == 0:
-            return node_embeddings
-        
+            if self.n_layers == 0: # If no GAT layers, project initial embeddings
+                return self.final_embedding_projection(node_embeddings)
+            else: # If GAT layers exist but no neighbors for this batch, return memory (which should be projected later if used by link predictor)
+                  # Or, consistently output embedding_dim.
+                  # The design implies that if GAT layers are present, their output (embedding_dim) is desired.
+                  # If no neighbors, but GAT layers *could* have run, what should be the output dim?
+                  # For link prediction, it MUST be embedding_dim.
+                  # So, if node_embeddings (memory_dim) is not embedding_dim, project it.
+                return self.final_embedding_projection(node_embeddings)
+
         # Process neighbor features
         if neighbor_features is not None:
             neighbor_embeddings = self.node_embedding(neighbor_features)  # [batch_size, n_neighbors, memory_dim]
@@ -611,7 +652,7 @@ class TemporalGraphNetwork(nn.Module):
         
         # Apply graph attention layers
         x = node_embeddings
-        for layer in self.graph_attention_layers:
+        for layer_idx, layer in enumerate(self.graph_attention_layers):
             x = layer(
                 node_features=x,
                 node_time_features=time_features,
