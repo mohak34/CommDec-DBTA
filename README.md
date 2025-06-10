@@ -1,20 +1,22 @@
-# Community Detection with Enhanced Temporal Graph Networks (TGN)
+# Community Detection and Link Prediction with Temporal Graph Networks
 
 ## Project Overview
 
-This project implements and extends the Temporal Graph Network (TGN) architecture for community detection in dynamic graphs. The implementation is based on the original TGN paper from Twitter Research: [Temporal Graph Networks for Deep Learning on Dynamic Graphs](https://arxiv.org/abs/2006.10637).
+This project implements two variants of Temporal Graph Network (TGN) architectures for community detection and link prediction in dynamic graphs. The implementation is based on the original TGN paper from Twitter Research: [Temporal Graph Networks for Deep Learning on Dynamic Graphs](https://arxiv.org/abs/2006.10637).
 
-The key enhancements include:
+The project provides:
 
-1. **Disabled Decay Factor**: The decay factor in the DecayTemporalAttention class has been modified (set to zero) to evaluate model performance without temporal decay metrics.
-2. **Graph Visualization**: Added comprehensive visualization capabilities to analyze and understand the temporal evolution of communities in dynamic graphs.
+1. **Standard TGN Model**: Complete implementation of the original TGN architecture with configurable temporal attention mechanisms.
+2. **Decay TGN Model**: Enhanced TGN with decay-based temporal attention that models how the importance of historical interactions decreases over time.
+3. **Comparative Analysis**: Framework for comparing the performance of both models on community detection and link prediction tasks.
+4. **Graph Visualization**: Comprehensive visualization capabilities to analyze temporal evolution of communities and network structures.
 
 ## Installation and Setup
 
 1. **Clone the repository**:
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/mohak34/CommDec-DBTA
    cd CommunityDetection
    ```
 
@@ -26,27 +28,53 @@ The key enhancements include:
 
 ## Usage
 
-### Running the Enhanced TGN Model
+### Running the Standard TGN Model
 
-The main implementation is available in the notebook `notebooks/Enhanced_TGN.ipynb`. This notebook contains the complete implementation of the Temporal Graph Network with the Reddit dataset.
+The main implementation is available in `src/enhanced_tgn.py`. This file contains the complete implementation of the standard Temporal Graph Network with the Reddit dataset.
 
-### Visualizing Communities
+### Running the Decay TGN Model
 
-To visualize communities in the temporal graph:
+The enhanced Decay TGN model with temporal attention decay is implemented in `src/decay_tgn.py`. This model includes:
 
-1. Open `notebooks/TGN_with_Visualization.ipynb`
-2. Run the notebook to see visualizations of the Reddit dataset and community structures
-3. The visualizations show how communities evolve over time in the dynamic graph
+- Configurable decay factors for temporal attention
+- Memory modules with decay-based temporal attention
+- Adaptive decay mechanisms for learning temporal patterns
+
+### Comparative Analysis
+
+To compare both models:
+
+1. Use the standard TGN implementation in `notebooks/Enhanced_TGN.ipynb`
+2. Use the Decay TGN implementation with different decay factors via `src/decay_tgn.py`
+3. Run experiments with various decay factors to analyze their impact on performance
 
 ## Key Components
 
-### Enhanced TGN Model
+### Standard TGN Model (`src/enhanced_tgn.py`)
 
-The enhanced TGN model includes a modified DecayTemporalAttention mechanism where the decay factor has been disabled (set to zero) to evaluate the model's performance without temporal decay metrics.
+The standard TGN implementation includes:
 
-## TGN Model Documentation
+- Temporal attention mechanisms for modeling dynamic graph interactions
+- Memory modules for storing and updating node states over time
+- Message passing and aggregation for community detection
+- Link prediction capabilities
 
-For detailed documentation on the Temporal Graph Network model, please see [TGN README](docs/README_TGN.md).
+### Decay TGN Model (`src/decay_tgn.py`)
+
+The Decay TGN model extends the standard TGN with:
+
+- Configurable decay factors for temporal attention weights
+- Adaptive decay mechanisms that learn optimal decay rates
+- Enhanced memory modules with temporal decay consideration
+- Comprehensive decay analysis and visualization tools
+
+### Model Comparison
+
+Both models can be evaluated on:
+
+- **Community Detection**: Identifying clusters of related nodes in temporal graphs
+- **Link Prediction**: Predicting future connections between nodes
+- **Temporal Pattern Analysis**: Understanding how relationships evolve over time
 
 ## Dataset
 
